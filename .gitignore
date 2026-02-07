@@ -1,11 +1,11 @@
 # dependencies
 node_modules/
 
-# production builds
+# Vite / build output
 dist/
 build/
 
-# environment variables
+# env files (secrets)
 .env
 .env.*
 !.env.example
@@ -16,17 +16,15 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# OS / editor junk
+# OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Prisma
-prisma/migrations/
-
-# Docker
-*.log
-
-# Optional: local uploads (if any)
+# Optional: local uploads
 uploads/
+
+# Prisma migrations
+# If you WANT to commit migrations, remove the next line
+prisma/migrations/
