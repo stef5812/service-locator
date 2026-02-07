@@ -25,6 +25,3 @@ Thumbs.db
 # Optional: local uploads
 uploads/
 
-# Prisma migrations
-# If you WANT to commit migrations, remove the next line
-prisma/migrations/
