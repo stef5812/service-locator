@@ -4,7 +4,7 @@ import logo from "./assets/logo.png";
 
 import {
   APIProvider,
-  Map,
+  Map as GoogleMap,
   Marker,
   InfoWindow,
   useMap,
@@ -15,6 +15,26 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:3007";
 // IMPORTANT: your SVGs should be here:
 // frontend/public/assets/map-icons/*.svg
 const ICON_BASE = `${import.meta.env.BASE_URL}assets/map-icons`;
+
+const LABEL_BY_TYPE = {
+  CHIME: "Deaf & Hard of Hearing Services",
+  ALZ: "Alzheimer’s & Dementia Support",
+  WA: "West Cork Services",
+  NCBI: "Vision Impairment Support",
+  PHA: "Public Health",
+  NURSE: "Community Nursing",
+  MOW: "Meals on Wheels",
+  MABS: "Money Advice & Budgeting",
+  PCARE: "Primary Care",
+  HOSP: "Hospital Services",
+  HSE: "Health Service Executive",
+  "24hr-Garda": "Gardaí (24-hour)",
+  Garda: "Garda Station",
+  coco: "County Council",
+  cyco: "City Council",
+  regco: "Regional Council",
+};
+
 
 const ICON_BY_TYPE = {
   CHIME: `${ICON_BASE}/CHIME.svg`,
@@ -35,20 +55,34 @@ const ICON_BY_TYPE = {
   regco: `${ICON_BASE}/regco.svg`,
 };
 
-function markerIconForType(type) {
+// ---- Marker sizing + blink (polished but safe) ----
+const SIZE_BASE = 44;
+const SIZE_SELECTED = 62;
+const BLINK_SIZES = [44, 70, 40, 66, 44];
+const BLINK_STEP_MS = 120;
+
+// Cache icons: key = `${type}|${size}`
+const iconCache = new globalThis.Map();
+
+function buildMarkerIcon(type, size) {
   const url = ICON_BY_TYPE[type];
   if (!url) return undefined;
+
+  // google maps objects only exist after the API loads
   if (!window.google?.maps?.Size || !window.google?.maps?.Point) return undefined;
 
-  // Adjust as you like
-  const w = 28;
-  const h = 28;
+  const key = `${type}|${size}`;
+  if (iconCache.has(key)) return iconCache.get(key);
 
-  return {
+  const icon = {
     url,
-    scaledSize: new window.google.maps.Size(w, h),
-    anchor: new window.google.maps.Point(w / 2, h),
+    scaledSize: new window.google.maps.Size(size, size),
+    // bottom-center anchor so it "sits" on the location
+    anchor: new window.google.maps.Point(size / 2, size),
   };
+
+  iconCache.set(key, icon);
+  return icon;
 }
 
 /**
@@ -65,13 +99,11 @@ function PanToCenter({ targetCenter, targetZoom }) {
     const key = `${targetCenter.lat.toFixed(6)},${targetCenter.lng.toFixed(
       6
     )},${targetZoom ?? ""}`;
+
     if (lastKeyRef.current === key) return;
 
     map.panTo(targetCenter);
-
-    if (typeof targetZoom === "number") {
-      map.setZoom(targetZoom);
-    }
+    if (typeof targetZoom === "number") map.setZoom(targetZoom);
 
     lastKeyRef.current = key;
   }, [map, targetCenter, targetZoom]);
@@ -107,8 +139,6 @@ function FitBoundsOnce({ points, disable }) {
 export default function App() {
   const [locations, setLocations] = useState([]);
   const [visibleTypes, setVisibleTypes] = useState({});
-  const [flashType, setFlashType] = useState(null);
-
   const [selected, setSelected] = useState(null);
 
   // For explicit pan/zoom actions
@@ -117,6 +147,19 @@ export default function App() {
 
   const [userPos, setUserPos] = useState(null);
   const [query, setQuery] = useState("");
+
+  // Blink state: type -> step index (0 = no blink)
+  const [blinkStepByType, setBlinkStepByType] = useState({});
+  const blinkTimeoutsRef = useRef({}); // plain object (safe, avoids Map name collision entirely)
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      for (const k of Object.keys(blinkTimeoutsRef.current)) {
+        clearTimeout(blinkTimeoutsRef.current[k]);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/locations`)
@@ -156,11 +199,41 @@ export default function App() {
     [filtered]
   );
 
+  function startBlinkForType(t) {
+    // clear any prior sequence
+    if (blinkTimeoutsRef.current[t]) clearTimeout(blinkTimeoutsRef.current[t]);
+
+    const run = (step) => {
+      setBlinkStepByType((prev) => ({ ...prev, [t]: step }));
+
+      if (step >= BLINK_SIZES.length - 1) {
+        // finish: reset after one last tick
+        blinkTimeoutsRef.current[t] = setTimeout(() => {
+          setBlinkStepByType((prev) => ({ ...prev, [t]: 0 }));
+          blinkTimeoutsRef.current[t] = null;
+        }, BLINK_STEP_MS);
+        return;
+      }
+
+      blinkTimeoutsRef.current[t] = setTimeout(
+        () => run(step + 1),
+        BLINK_STEP_MS
+      );
+    };
+
+    // Start at 1 so it visibly "pops"
+    run(1);
+  }
+
   function toggleType(t) {
-    setVisibleTypes((prev) => ({ ...prev, [t]: !prev[t] }));
-    setSelected((prev) => (prev?.type === t ? null : prev)); // close popup if hiding type
-    setFlashType(t);
-    window.setTimeout(() => setFlashType(null), 1200);
+    setVisibleTypes((prev) => {
+      const next = !prev[t];
+      if (next) startBlinkForType(t); // blink only when turning ON
+      return { ...prev, [t]: next };
+    });
+
+    // close popup if hiding selected type
+    setSelected((prev) => (prev?.type === t ? null : prev));
   }
 
   function useMyLocation() {
@@ -169,7 +242,7 @@ export default function App() {
         const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setUserPos(p);
         setTargetCenter(p);
-        setTargetZoom(14); // ✅ zoom in a bit
+        setTargetZoom(14);
       },
       (err) => alert(err.message),
       { enableHighAccuracy: true, timeout: 10000 }
@@ -190,18 +263,32 @@ export default function App() {
     if (!resp.ok) return alert(data.error || "Geocode failed");
 
     setTargetCenter({ lat: data.lat, lng: data.lng });
-    setTargetZoom(14); // ✅ zoom in a bit when going to an Eircode
+    setTargetZoom(14);
+  }
+
+  function sizeForLocation(l) {
+    const t = l.type;
+    const blinkStep = blinkStepByType[t] || 0;
+
+    if (blinkStep > 0) {
+      return BLINK_SIZES[Math.min(blinkStep, BLINK_SIZES.length - 1)];
+    }
+    if (selected?.id === l.id) return SIZE_SELECTED;
+    return SIZE_BASE;
   }
 
   return (
     <div style={{ position: "fixed", inset: 0 }}>
       {/* MAP full-screen behind */}
       <APIProvider apiKey={import.meta.env.VITE_GOOGLE_MAPS_KEY}>
-        <Map
+        <GoogleMap
           defaultCenter={{ lat: 53.3498, lng: -6.2603 }}
           defaultZoom={7}
           style={{ width: "100%", height: "100%" }}
           gestureHandling="greedy"
+          // optional “cleaner” UI feel:
+          // disableDefaultUI={true}
+          // zoomControl={true}
         >
           <PanToCenter targetCenter={targetCenter} targetZoom={targetZoom} />
           <FitBoundsOnce
@@ -209,29 +296,31 @@ export default function App() {
             disable={typeof targetZoom === "number"}
           />
 
-          {filtered.map((l) => (
-            <Marker
-              key={l.id}
-              position={{ lat: l.lat, lng: l.lng }}
-              title={l.name || ""}
-              className={flashType === l.type ? "pulse" : ""}
-              icon={markerIconForType(l.type)}
-              onClick={() => setSelected(l)}
-            />
-          ))}
+          {filtered.map((l) => {
+            const size = sizeForLocation(l);
+            return (
+              <Marker
+                key={l.id}
+                position={{ lat: l.lat, lng: l.lng }}
+                title={l.name || ""}
+                icon={buildMarkerIcon(l.type, size)}
+                onClick={() => setSelected(l)}
+              />
+            );
+          })}
 
           {selected ? (
             <InfoWindow
               position={{ lat: selected.lat, lng: selected.lng }}
               onCloseClick={() => setSelected(null)}
             >
-              <div style={{ maxWidth: 280 }}>
+              <div style={{ maxWidth: 300, fontFamily: "inherit" }}>
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
-                    marginBottom: 8,
+                    marginBottom: 10,
                   }}
                 >
                   {ICON_BY_TYPE[selected.type] ? (
@@ -239,19 +328,25 @@ export default function App() {
                       src={ICON_BY_TYPE[selected.type]}
                       alt=""
                       aria-hidden="true"
-                      style={{ width: 44, height: 44, flex: "0 0 auto" }}
+                      style={{
+                        width: 44,
+                        height: 44,
+                        flex: "0 0 auto",
+                      }}
                     />
                   ) : null}
 
-                  <div style={{ fontWeight: 700 }}>
-                    {selected.name || "Untitled"}
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 14, lineHeight: 1.1 }}>
+                      {selected.name || "Untitled"}
+                    </div>
+                    <div style={{ fontSize: 12, color: "rgba(15,23,42,0.65)" }}>
+                      {selected.type}
+                    </div>
                   </div>
                 </div>
 
-                <div style={{ fontSize: 12, color: "#444", marginBottom: 6 }}>
-                  <div>
-                    <b>Type:</b> {selected.type}
-                  </div>
+                <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.5 }}>
                   {selected.address ? (
                     <div>
                       <b>Address:</b> {selected.address}
@@ -270,46 +365,57 @@ export default function App() {
                 </div>
 
                 {selected.website ? (
-                  <div style={{ fontSize: 12 }}>
-                    <a href={selected.website} target="_blank" rel="noreferrer">
-                      Website
+                  <div style={{ marginTop: 10 }}>
+                    <a
+                      href={selected.website}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        textDecoration: "none",
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        border: "1px solid rgba(17,24,39,0.12)",
+                        background: "white",
+                        color: "#0f172a",
+                      }}
+                    >
+                      Visit website →
                     </a>
                   </div>
                 ) : null}
               </div>
             </InfoWindow>
           ) : null}
-        </Map>
+        </GoogleMap>
       </APIProvider>
 
       {/* FLOATING SIDEBAR overlays the map */}
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 12,
-          width: 360,
-          maxHeight: "calc(100% - 24px)",
-          overflow: "auto",
-          padding: 12,
-          borderRadius: 14,
-          background: "rgba(255,255,255,0.82)",
-          backdropFilter: "blur(8px)",
-          boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
-          border: "1px solid rgba(255,255,255,0.35)",
-        }}
-      >          
-        <img
-          src={logo}
-          alt="Your app logo"
-          className="mapLogo"
-        />
-        <h2 style={{ marginTop: 0 }}>Locations</h2>
+      <div className="sidebar">
+        <img src={logo} alt="Your app logo" className="mapLogo" />
+
+        <div className="subtitle">Service Locator</div>
+
+        <h2>Locations</h2>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button onClick={useMyLocation}>Use my location</button>
+          <button className="btn primary" onClick={useMyLocation}>
+            Use my location
+          </button>
+
           {userPos ? (
-            <span style={{ fontSize: 12, color: "#666", alignSelf: "center" }}>
+            <span
+              style={{
+                fontSize: 12,
+                color: "rgba(15,23,42,0.65)",
+                alignSelf: "center",
+                whiteSpace: "nowrap",
+              }}
+            >
               {userPos.lat.toFixed(5)}, {userPos.lng.toFixed(5)}
             </span>
           ) : null}
@@ -317,65 +423,213 @@ export default function App() {
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <input
+            className="input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Enter Eircode..."
             style={{ flex: 1 }}
           />
-          <button onClick={geocode}>Go</button>
+          <button className="btn" onClick={geocode}>
+            Go
+          </button>
         </div>
 
+        <div className="divider" />
+
         <h3>Key (Type)</h3>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+
+        <div className="chips">
           {types.map((t) => (
-            <button
+            <div
               key={t}
+              className={`chip ${visibleTypes[t] === false ? "off" : ""}`}
               onClick={() => toggleType(t)}
-              style={{
-                opacity: visibleTypes[t] === false ? 0.45 : 1,
-                border: flashType === t ? "2px solid black" : "1px solid #ccc",
-                padding: "6px 10px",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                background: "#fff",
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") toggleType(t);
               }}
+              title="Toggle markers"
             >
               {ICON_BY_TYPE[t] ? (
-                <img
-                  src={ICON_BY_TYPE[t]}
-                  alt=""
-                  aria-hidden="true"
-                  style={{ width: 18, height: 18, display: "block" }}
-                />
+                <img src={ICON_BY_TYPE[t]} alt="" aria-hidden="true" />
               ) : null}
-              <span>{t}</span>
-            </button>
+              <span>{LABEL_BY_TYPE[t] ?? t}</span>
+            </div>
           ))}
         </div>
 
-        <div style={{ marginTop: 16, fontSize: 12, color: "#555" }}>
-          Showing {filtered.length} / {locations.length}
-        </div>
-
-        <div style={{ marginTop: 12, fontSize: 12, color: "#777" }}>
-          API: {API_BASE}
+        <div className="meta">
+          <span>
+            Showing <b>{filtered.length}</b> / {locations.length}
+          </span>
+          <span style={{ textAlign: "right" }}>
+            API: <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>{API_BASE}</span>
+          </span>
         </div>
       </div>
 
       <style>{`
-        .mapLogo {
-          height: 48px;   /* try 40–60px */
-          width: auto;    /* keeps proportions */
+        :root{
+          --bg: rgba(255,255,255,0.86);
+          --bg-strong: rgba(255,255,255,0.94);
+          --border: rgba(17,24,39,0.12);
+          --text: #0f172a;
+          --muted: rgba(15,23,42,0.65);
+          --shadow: 0 16px 40px rgba(2,6,23,0.18);
+          --shadow-soft: 0 10px 30px rgba(2,6,23,0.12);
+          --radius: 16px;
+          --radius-sm: 12px;
+          --focus: 0 0 0 4px rgba(59,130,246,0.18);
+        }
+
+        body{
+          margin: 0;
+          font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+          color: var(--text);
+        }
+
+        .sidebar{
+          position: absolute;
+          top: 55px;
+          left: 12px;
+          width: 260px;
+          max-height: calc(100% - 24px);
+          overflow: auto;
+          padding: 14px;
+          border-radius: var(--radius);
+          background: var(--bg);
+          backdrop-filter: blur(10px);
+          border: 1px solid var(--border);
+          box-shadow: var(--shadow);
+        }
+
+        .sidebar h2{
+          margin: 10px 0 8px;
+          font-size: 18px;
+          letter-spacing: -0.02em;
+        }
+
+        .sidebar h3{
+          margin: 14px 0 8px;
+          font-size: 13px;
+          color: var(--muted);
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .subtitle{
+          margin: 0 0 6px;
+          font-size: 12px;
+          color: var(--muted);
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+        }
+
+        .mapLogo{
+          height: 42px;
+          width: auto;
+          display: block;
+          margin-bottom: 6px;
+          filter: drop-shadow(0 8px 18px rgba(2,6,23,0.10));
+        }
+
+        .input{
+          height: 40px;
+          padding: 0 12px;
+          border-radius: 12px;
+          border: 1px solid var(--border);
+          background: var(--bg-strong);
+          outline: none;
+          font-size: 14px;
+          color: var(--text);
+        }
+        .input:focus{
+          box-shadow: var(--focus);
+          border-color: rgba(59,130,246,0.45);
+        }
+
+        .btn{
+          height: 40px;
+          padding: 0 12px;
+          border-radius: 12px;
+          border: 1px solid var(--border);
+          background: white;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 14px;
+          transition: transform 0.05s ease, box-shadow 0.15s ease, background 0.15s ease;
+          color: var(--text);
+        }
+        .btn:hover{
+          box-shadow: var(--shadow-soft);
+          transform: translateY(-1px);
+        }
+        .btn:active{
+          transform: translateY(0px);
+          box-shadow: none;
+        }
+        .btn.primary{
+          background: #2563eb;
+          border-color: rgba(37,99,235,0.55);
+          color: white;
+        }
+        .btn.primary:hover{
+          background: #1d4ed8;
+        }
+
+        .divider{
+          height: 1px;
+          background: rgba(2,6,23,0.08);
+          margin: 12px 0;
+        }
+
+        .chips{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .chip{
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: white;
+          cursor: pointer;
+          user-select: none;
+          font-size: 13px;
+          font-weight: 700;
+          transition: transform 0.05s ease, box-shadow 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+        }
+        .chip:hover{
+          transform: translateY(-1px);
+          box-shadow: var(--shadow-soft);
+        }
+        .chip:focus{
+          outline: none;
+          box-shadow: var(--focus);
+        }
+        .chip.off{
+          opacity: 0.48;
+          background: rgba(255,255,255,0.7);
+        }
+        .chip img{
+          width: 18px;
+          height: 18px;
           display: block;
         }
-        .pulse {
-          animation: pulse 0.6s ease-in-out 0s 2;
-        }
-        @keyframes pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.35); }
-          100% { transform: scale(1); }
+
+        .meta{
+          margin-top: 14px;
+          font-size: 12px;
+          color: var(--muted);
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
         }
       `}</style>
     </div>
