@@ -1,5 +1,7 @@
 // App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import logo from "./assets/logo.png";
+
 import {
   APIProvider,
   Map,
@@ -296,7 +298,12 @@ export default function App() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
           border: "1px solid rgba(255,255,255,0.35)",
         }}
-      >
+      >          
+        <img
+          src={logo}
+          alt="Your app logo"
+          className="mapLogo"
+        />
         <h2 style={{ marginTop: 0 }}>Locations</h2>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -357,6 +364,11 @@ export default function App() {
       </div>
 
       <style>{`
+        .mapLogo {
+          height: 48px;   /* try 40–60px */
+          width: auto;    /* keeps proportions */
+          display: block;
+        }
         .pulse {
           animation: pulse 0.6s ease-in-out 0s 2;
         }

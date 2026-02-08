@@ -1,0 +1,258 @@
+📌 Map App / Service Locator (Authoritative)
+
+Project name: Map App / Service Locator
+Owner: Stefan Dodds
+Server: Hostinger VPS (Ubuntu)
+Domain: https://stefandodds.ie
+Path: /service-locator/
+Version control: GitHub
+Deployment model: git push (local) → git pull (server)
+
+────────────────────────────────────────────────────────────
+🎯 PURPOSE OF THE APP
+
+A full-stack Service Locator that:
+- Displays services on a Google Map
+- Imports services from CSV / Excel
+- Stores services in PostgreSQL
+- Supports filtering by service type
+- Runs as a React frontend + Node/Express API
+- Is served under a sub-path (/service-locator/)
+
+────────────────────────────────────────────────────────────
+🧱 HIGH-LEVEL ARCHITECTURE
+
+Frontend
+- Vite + React
+- Uses @vis.gl/react-google-maps
+- Built output is static (dist/)
+- Served by Nginx
+- NEVER references localhost or ports in production
+- Uses relative API paths only
+
+Backend
+- Node.js (ESM)
+- Express
+- Prisma ORM
+- Multer + xlsx for CSV/Excel uploads
+- REST API only
+
+Database
+- PostgreSQL 16
+- Runs in Docker
+- Prisma schema is the source of truth
+
+────────────────────────────────────────────────────────────
+📁 SERVER DIRECTORY STRUCTURE
+
+Repo root:
+/var/www/service-locator
+
+Structure:
+/var/www/service-locator
+├── frontend/
+│   ├── src/
+│   ├── vite.config.js
+│   ├── package.json
+│   └── dist/          ← production build output
+│
+├── backend/
+│   ├── src/server.js
+│   ├── prisma/schema.prisma
+│   ├── .env
+│   └── package.json
+│
+└── docker/             ← postgres container (if present)
+
+This folder IS the git repository root.
+This is where `git pull` is always run.
+
+────────────────────────────────────────────────────────────
+🌐 NGINX CONFIG (CRITICAL)
+
+Frontend
+- Served under: /service-locator/
+- Points to frontend/dist
+
+API
+- Public path: /service-locator/api/*
+- Rewritten internally to backend /api/*
+
+Canonical pattern:
+location = /service-locator {
+  return 301 /service-locator/;
+}
+
+location ^~ /service-locator/api/ {
+  rewrite ^/service-locator/api/(.*)$ /api/$1 break;
+  proxy_pass http://127.0.0.1:3007;
+}
+
+location /service-locator/ {
+  root /var/www/stefandodds.ie;
+  index index.html;
+}
+
+Nginx is the single entry point.
+Frontend NEVER talks to ports directly.
+
+────────────────────────────────────────────────────────────
+⚙️ VITE CONFIG (FRONTEND)
+
+vite.config.js MUST include:
+
+- Correct base path
+- Dev proxy for local testing only
+
+Example:
+export default defineConfig({
+  base: "/service-locator/",
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:3007",
+        changeOrigin: true
+      }
+    }
+  }
+})
+
+If `base` is wrong:
+- App loads blank
+- JS loads but routing breaks
+- Map may not render
+
+────────────────────────────────────────────────────────────
+🗺️ GOOGLE MAPS CONFIG
+
+Uses Google Maps JavaScript API.
+
+Environment variable (frontend):
+VITE_GOOGLE_MAPS_KEY=YOUR_BROWSER_KEY
+
+IMPORTANT:
+- Must be a Browser API key
+- Must allow HTTP referrers:
+  - https://stefandodds.ie/*
+  - http://localhost:* (for dev)
+
+Common error:
+"Google Maps JavaScript API warning: InvalidKey"
+→ wrong key OR referrer restriction mismatch
+
+────────────────────────────────────────────────────────────
+🧠 FRONTEND MAP BEHAVIOUR
+
+- Map uses vis.gl Map component
+- Center defaults to Dublin
+- Zoom and pan must be enabled
+- Map container must have explicit height
+- If map is visible but cannot move:
+  - check gestureHandling
+  - check CSS height/overflow
+  - check container positioning
+
+────────────────────────────────────────────────────────────
+📡 BACKEND API ENDPOINTS
+
+Health:
+GET /api/health
+→ { ok: true }
+
+Locations:
+GET /api/locations
+→ returns all map points
+
+Import:
+POST /api/import/excel
+- Accepts CSV or Excel
+- Normalises headers
+- Skips duplicates
+- Uses sourceId for dedupe
+- Logs inserted / updated / skipped rows
+
+────────────────────────────────────────────────────────────
+🗄️ DATABASE & PRISMA
+
+- Prisma schema defines Location model
+- CSV import maps columns → Prisma fields
+- DB container MUST be running before backend
+
+Common commands:
+docker ps
+docker start <postgres-container>
+
+npx prisma generate
+npx prisma migrate dev        (local)
+npx prisma migrate deploy    (server, intentional only)
+
+────────────────────────────────────────────────────────────
+🚀 DEPLOYMENT FLOW (SAFE)
+
+LOCAL:
+1) Make changes
+2) npm run dev (optional test)
+3) git add .
+4) git commit -m "describe change"
+5) git push
+
+SERVER:
+1) cd /var/www/service-locator
+2) git pull
+
+Backend:
+3) cd backend
+4) npm ci || npm install
+5) npx prisma generate (safe after pulls)
+6) restart backend process (PM2/systemd)
+
+Frontend:
+7) cd ../frontend
+8) npm ci || npm install
+9) npm run build
+
+Nginx:
+10) nginx -t && systemctl reload nginx
+
+────────────────────────────────────────────────────────────
+🧨 KNOWN FAILURE MODES
+
+❌ Map works locally but not in browser
+→ frontend not rebuilt
+
+❌ Blank page after deploy
+→ wrong Vite base path
+
+❌ API works locally but not in prod
+→ Nginx rewrite mismatch
+
+❌ InvalidKey warning
+→ Google Maps key restriction
+
+❌ Map visible but frozen
+→ CSS / container / gesture handling issue
+
+────────────────────────────────────────────────────────────
+✅ SANITY CHECKS
+
+Backend:
+curl http://127.0.0.1:3007/api/health
+
+Public API:
+https://stefandodds.ie/service-locator/api/locations
+
+Frontend:
+- JS loads
+- No console errors
+- Map tiles render
+- Zoom and pan work
+
+────────────────────────────────────────────────────────────
+🧠 FINAL MENTAL MODEL
+
+- Nginx decides reality
+- Git repo = source
+- dist/ = disposable
+- Frontend must be rebuilt
+- Backend must be restarted
+- Database must be running first

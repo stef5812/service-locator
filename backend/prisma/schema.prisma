@@ -30,6 +30,7 @@ model Location {
   @@unique([source, sourceId], name: "source_sourceId")
   @@index([type])
   @@index([eircode])
+  @@map("Location")
 }
 
 model GeocodeCache {
@@ -44,4 +45,6 @@ model GeocodeCache {
   lastUsedAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  @@map("GeocodeCache")
 }
