@@ -35,7 +35,6 @@ const LABEL_BY_TYPE = {
   regco: "Regional Council",
 };
 
-
 const ICON_BY_TYPE = {
   CHIME: `${ICON_BASE}/CHIME.svg`,
   ALZ: `${ICON_BASE}/ALZ.svg`,
@@ -137,6 +136,29 @@ function FitBoundsOnce({ points, disable }) {
 }
 
 export default function App() {
+  // ✅ Retractable sidebar (persisted)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem("serviceLocator.sidebarOpen");
+    return saved === null ? true : saved === "true";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("serviceLocator.sidebarOpen", String(sidebarOpen));
+  }, [sidebarOpen]);
+
+  // Optional: press "s" to toggle sidebar (doesn't trigger while typing)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key.toLowerCase() !== "s") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+      setSidebarOpen((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const [locations, setLocations] = useState([]);
   const [visibleTypes, setVisibleTypes] = useState({});
   const [selected, setSelected] = useState(null);
@@ -150,7 +172,7 @@ export default function App() {
 
   // Blink state: type -> step index (0 = no blink)
   const [blinkStepByType, setBlinkStepByType] = useState({});
-  const blinkTimeoutsRef = useRef({}); // plain object (safe, avoids Map name collision entirely)
+  const blinkTimeoutsRef = useRef({}); // plain object (safe)
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -302,7 +324,8 @@ export default function App() {
               <Marker
                 key={l.id}
                 position={{ lat: l.lat, lng: l.lng }}
-                title={l.name || ""}
+                // More polished tooltip text:
+                title={`${l.name || "Service"} — ${LABEL_BY_TYPE[l.type] ?? l.type}`}
                 icon={buildMarkerIcon(l.type, size)}
                 onClick={() => setSelected(l)}
               />
@@ -341,7 +364,7 @@ export default function App() {
                       {selected.name || "Untitled"}
                     </div>
                     <div style={{ fontSize: 12, color: "rgba(15,23,42,0.65)" }}>
-                      {selected.type}
+                      {LABEL_BY_TYPE[selected.type] ?? selected.type}
                     </div>
                   </div>
                 </div>
@@ -395,77 +418,91 @@ export default function App() {
       </APIProvider>
 
       {/* FLOATING SIDEBAR overlays the map */}
-      <div className="sidebar">
-        <img src={logo} alt="Your app logo" className="mapLogo" />
+      <div className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
+        <button
+          className="sidebarToggle"
+          onClick={() => setSidebarOpen((v) => !v)}
+          aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          title={sidebarOpen ? "Hide" : "Show"}
+        >
+          {sidebarOpen ? "◀" : "▶"}
+        </button>
 
-        <div className="subtitle">Service Locator</div>
+        <div className="sidebarInner">
+          <img src={logo} alt="Your app logo" className="mapLogo" />
 
-        <h2>Locations</h2>
+          <div className="subtitle">Service Locator</div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button className="btn primary" onClick={useMyLocation}>
-            Use my location
-          </button>
+          <h2>Services</h2>
 
-          {userPos ? (
-            <span
-              style={{
-                fontSize: 12,
-                color: "rgba(15,23,42,0.65)",
-                alignSelf: "center",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {userPos.lat.toFixed(5)}, {userPos.lng.toFixed(5)}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button className="btn primary" onClick={useMyLocation}>
+              Use current location
+            </button>
+
+            {userPos ? (
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "rgba(15,23,42,0.65)",
+                  alignSelf: "center",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {userPos.lat.toFixed(5)}, {userPos.lng.toFixed(5)}
+              </span>
+            ) : null}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              className="input"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Enter Eircode or area…"
+              style={{ flex: 1 }}
+            />
+            <button className="btn" onClick={geocode}>
+              Search
+            </button>
+          </div>
+
+          <div className="divider" />
+
+          <h3>Filter by service</h3>
+
+          <div className="chips">
+            {types.map((t) => (
+              <div
+                key={t}
+                className={`chip ${visibleTypes[t] === false ? "off" : ""}`}
+                onClick={() => toggleType(t)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") toggleType(t);
+                }}
+                title="Toggle markers"
+              >
+                {ICON_BY_TYPE[t] ? (
+                  <img src={ICON_BY_TYPE[t]} alt="" aria-hidden="true" />
+                ) : null}
+                <span>{LABEL_BY_TYPE[t] ?? t}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="meta">
+            <span>
+              Showing <b>{filtered.length}</b> / {locations.length}
             </span>
-          ) : null}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <input
-            className="input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Enter Eircode..."
-            style={{ flex: 1 }}
-          />
-          <button className="btn" onClick={geocode}>
-            Go
-          </button>
-        </div>
-
-        <div className="divider" />
-
-        <h3>Key (Type)</h3>
-
-        <div className="chips">
-          {types.map((t) => (
-            <div
-              key={t}
-              className={`chip ${visibleTypes[t] === false ? "off" : ""}`}
-              onClick={() => toggleType(t)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") toggleType(t);
-              }}
-              title="Toggle markers"
-            >
-              {ICON_BY_TYPE[t] ? (
-                <img src={ICON_BY_TYPE[t]} alt="" aria-hidden="true" />
-              ) : null}
-              <span>{LABEL_BY_TYPE[t] ?? t}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="meta">
-          <span>
-            Showing <b>{filtered.length}</b> / {locations.length}
-          </span>
-          <span style={{ textAlign: "right" }}>
-            API: <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>{API_BASE}</span>
-          </span>
+            <span style={{ textAlign: "right" }}>
+              API:{" "}
+              <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                {API_BASE}
+              </span>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -489,19 +526,62 @@ export default function App() {
           color: var(--text);
         }
 
+        /* sidebar base */
         .sidebar{
           position: absolute;
-          top: 55px;
+          top: 55px;        /* moved down */
           left: 12px;
-          width: 260px;
+          width: 270px;     /* thinner */
           max-height: calc(100% - 24px);
-          overflow: auto;
+          overflow: visible;
           padding: 14px;
           border-radius: var(--radius);
           background: var(--bg);
           backdrop-filter: blur(10px);
           border: 1px solid var(--border);
           box-shadow: var(--shadow);
+          transition: transform 220ms ease, box-shadow 220ms ease;
+          will-change: transform;
+        }
+
+        .sidebarInner{
+          transition: opacity 180ms ease;
+          overflow: auto;
+        }
+
+        /* retract behavior */
+        .sidebar.closed{
+          transform: translateX(calc(-100% + 44px)); /* leaves a small tab visible */
+          box-shadow: none;
+        }
+
+        .sidebar.closed .sidebarInner{
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        /* the little tab button */
+        .sidebarToggle{
+          position: absolute;
+          top: 14px;
+          right: -14px;
+          width: 32px;
+          height: 32px;
+          border-radius: 999px;
+          border: 1px solid rgba(17,24,39,0.12);
+          background: rgba(255,255,255,0.92);
+          backdrop-filter: blur(10px);
+          cursor: pointer;
+          font-weight: 900;
+          box-shadow: 0 10px 22px rgba(2,6,23,0.16);
+          display: grid;
+          place-items: center;
+          transition: transform 0.08s ease, box-shadow 0.15s ease;
+        }
+
+        .sidebarToggle:hover{
+          transform: translateY(-1px);
+          box-shadow: 0 12px 26px rgba(2,6,23,0.18);
         }
 
         .sidebar h2{
